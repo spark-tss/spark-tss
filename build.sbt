@@ -6,7 +6,7 @@ version := "0.1"
 
 scalaVersion := "2.11.12"
 
-crossScalaVersions := Seq("2.11.12","2.10.6")
+//crossScalaVersions := Seq("2.11.12","2.10.6")
 
 publishMavenStyle := true
 
@@ -60,5 +60,7 @@ assemblyMergeStrategy in assembly := {
 
 test in assembly := {}
 
-organization := "Anthony Coutant"
+organization := "com.github.acout"
 licenses += ("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0.txt"))
+bintrayRepository := "SparkTSS"
+bintrayOrganization := Some("anthonycoutant")
