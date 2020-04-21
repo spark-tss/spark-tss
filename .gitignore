@@ -1,2 +1,10 @@
 *.class
 *.log
+*.code-workspace
+.metals/*
+.metals
+project/project/*
+project/target/*
+project/target
+target/*
+target
