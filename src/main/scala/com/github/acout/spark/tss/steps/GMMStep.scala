@@ -25,11 +25,7 @@ case class GMMStep(outHardColNames: Array[String], outSoftColNames: Array[String
         println(outHardColNames(i) + " " + ks(i))
         try{
           //println(tss.series.rdd.mapPartitions(x => Iterator(x.size)).collect().sorted.mkString(", "))
-          //println("dump partition pre")
-          //TSSBench.dumpPartition(tss)
           val tsss = tss.addGMM(outHardColNames(i), outSoftColNames(i), outLLColNames(i), inColName, ks(i), maxIterations, kMeansInit, runsNb, Some(new File(centerFilePaths(i))), Some(fullModelPaths(i)))//.repartition(128)
-          //println("dump partition post")
-          //TSSBench.dumpPartition(tsss
           /*println("Partitioner: " + tsss.series.rdd.partitioner)
           println("Num Partitions: " + tsss.series.rdd.partitions.size)
           println(tsss.series.rdd.mapPartitions(x => Iterator(x.size)).collect().sorted.mkString(", "))*/

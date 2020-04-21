@@ -6,6 +6,8 @@ version := "0.1"
 
 scalaVersion := "2.11.12"
 
+crossScalaVersions := Seq("2.11.12","2.10.6")
+
 publishMavenStyle := true
 
 libraryDependencies += "org.apache.spark" %% "spark-core" % "2.4.3"
@@ -57,3 +59,6 @@ assemblyMergeStrategy in assembly := {
 }
 
 test in assembly := {}
+
+organization := "Anthony Coutant"
+licenses += ("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0.txt"))

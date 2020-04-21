@@ -8,7 +8,6 @@ import breeze.interpolation._
 import breeze.linalg.{DenseMatrix, DenseVector}
 import breeze.signal.fourierFreq
 import breeze.stats.distributions.MultivariateGaussian
-import com.github.acout.spark.tss.bench.{Benchable, TSSBench}
 import org.apache.spark.ml.classification.DecisionTreeClassifier
 import org.apache.spark.ml.clustering._
 import org.apache.spark.ml.evaluation.MulticlassClassificationEvaluator
@@ -40,7 +39,7 @@ import org.apache.hadoop.fs.{FileSystem, Path}
   * @param inSeries the DataFrame containing time series data and diverse representations / transformations
   * @param forceIds whether to force the recomputation of unique ids for each row or not (costly phase, not needed after simple mappings for example)
   */
-case class TSS(inSeries: DataFrame, forceIds: Boolean = false) extends Benchable {
+case class TSS(inSeries: DataFrame, forceIds: Boolean = false) {
 
   //Auto add a unique id column if it does not exist or if ids forcing is required
   val series =
