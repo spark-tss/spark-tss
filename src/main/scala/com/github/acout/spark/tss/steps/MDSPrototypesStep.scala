@@ -1,8 +1,8 @@
-package com.github.acout.spark.tss.steps
+package com.github.unsupervise.spark.tss.steps
 
 import java.io.{BufferedWriter, File, FileWriter}
 
-import com.github.acout.spark.tss.core.{PrototypeDistsF, TSS}
+import com.github.unsupervise.spark.tss.core.{PrototypeDistsF, TSS}
 
 /**
   * Lazy Multi-Dimensional Scaling (MDS) Dimension Reduction from pairwise clustering prototype distance matrix Step Command.

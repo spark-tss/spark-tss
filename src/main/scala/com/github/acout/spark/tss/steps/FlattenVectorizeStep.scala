@@ -1,5 +1,5 @@
-package com.github.acout.spark.tss.steps
-import com.github.acout.spark.tss.core.TSS
+package com.github.unsupervise.spark.tss.steps
+import com.github.unsupervise.spark.tss.core.TSS
 
 /**
   * Lazy Flattening and Vectorization Step Command.

@@ -1,6 +1,6 @@
-package com.github.acout.spark.tss.steps
+package com.github.unsupervise.spark.tss.steps
 
-import com.github.acout.spark.tss.core.TSS
+import com.github.unsupervise.spark.tss.core.TSS
 import org.apache.spark.rdd.RDD
 
 /**

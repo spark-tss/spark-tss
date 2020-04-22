@@ -1,7 +1,7 @@
-package com.github.acout.spark.tss.steps
+package com.github.unsupervise.spark.tss.steps
 
-import com.github.acout.spark.tss.core.TSS
-import com.github.acout.spark.tss.functions.{log10, scale}
+import com.github.unsupervise.spark.tss.core.TSS
+import com.github.unsupervise.spark.tss.functions.{log10, scale}
 import org.apache.spark.ml.linalg.Vectors
 import org.apache.spark.sql.functions
 

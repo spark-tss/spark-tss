@@ -1,4 +1,4 @@
-package com.github.acout.spark.tss
+package com.github.unsupervise.spark.tss
 
 import breeze.linalg.DenseVector
 import breeze.math.Complex

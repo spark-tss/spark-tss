@@ -1,4 +1,5 @@
 //import SparkSubmit.settings
+import Keys._
 
 name := "spark-tss"
 
@@ -60,7 +61,16 @@ assemblyMergeStrategy in assembly := {
 
 test in assembly := {}
 
-organization := "com.github.acout"
+organization := "com.github.unsupervise"
 licenses += ("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0.txt"))
-bintrayRepository := "SparkTSS"
-bintrayOrganization := Some("anthonycoutant")
+bintrayRepository := "maven"
+bintrayOrganization := Some("unsupervise")
+
+developers := List(
+  Developer(
+    id    = "acout",
+    name  = "Anthony Coutant",
+    email = "coutant@lipn.univ-paris13.fr",
+    url   = url("http://anthonycoutant.me")
+  )
+)

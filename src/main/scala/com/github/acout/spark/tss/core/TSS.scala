@@ -1,6 +1,6 @@
-package com.github.acout.spark.tss.core
+package com.github.unsupervise.spark.tss.core
 
-import com.github.acout.spark.tss.functions._
+import com.github.unsupervise.spark.tss.functions._
 import java.io.{BufferedWriter, File, FileWriter}
 import java.util.UUID
 
@@ -271,7 +271,7 @@ case class TSS(inSeries: DataFrame, forceIds: Boolean = false) {
     * @param safetyOffset the offset to add to input values to avoid log10(0) error
     * @return an UDF for given offset
     */
-  def log10UDF(safetyOffset: Double = 0D) = udf((seq: Seq[Double]) => {com.github.acout.spark.tss.functions.log10(safetyOffset)(seq)})
+  def log10UDF(safetyOffset: Double = 0D) = udf((seq: Seq[Double]) => {com.github.unsupervise.spark.tss.functions.log10(safetyOffset)(seq)})
   /**
     * A UDF generator to compute categorical binary encoding of a category index scalar value.
     * For example, a value of 2 will be encoded as 001 followed by a number of zeros so that the Seq is of size <categoriesNumber>
@@ -409,7 +409,7 @@ case class TSS(inSeries: DataFrame, forceIds: Boolean = false) {
     */
   def addSymmetricLowPassFilter(outColName: String, sourceColName: String, keepQuantity: Int) = {
     addUDFColumn(outColName, sourceColName, symmetricLowPassUDF(keepQuantity))
-    //com.github.acout.spark.tss.core.TSS(series.withColumn(outColName, symmetricLowPassUDF(keepQuantity)(series(sourceColName))))
+    //com.github.unsupervise.spark.tss.core.TSS(series.withColumn(outColName, symmetricLowPassUDF(keepQuantity)(series(sourceColName))))
   }
   /**
     * Adds a Seq[Double] column with interpolations of a constant set of xs accross all rows from
@@ -1128,7 +1128,7 @@ case class TSS(inSeries: DataFrame, forceIds: Boolean = false) {
     */
   //Assumes join is performed by id and out column names are taken from sourceDataFrame
   def addByLeftJoin(sourceDataFrame: DataFrame, joinExpr: Column) = {
-    // = series(com.github.acout.spark.tss.core.TSS.ID_COLNAME) === sourceDataFrame(com.github.acout.spark.tss.core.TSS.ID_COLNAME)
+    // = series(com.github.unsupervise.spark.tss.core.TSS.ID_COLNAME) === sourceDataFrame(com.github.unsupervise.spark.tss.core.TSS.ID_COLNAME)
     new TSS(series.join(sourceDataFrame, joinExpr, "left_outer"))
   }
 

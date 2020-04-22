@@ -1,4 +1,4 @@
-package com.github.acout.spark.tss.core
+package com.github.unsupervise.spark.tss.core
 
 /**
   * Created by antho on 20/06/2019.

@@ -1,9 +1,9 @@
-package com.github.acout.spark.tss.steps
+package com.github.unsupervise.spark.tss.steps
 
 /**
   * Created by antho on 26/09/2019.
   */
-import com.github.acout.spark.tss.core._
+import com.github.unsupervise.spark.tss.core._
 import org.apache.spark.sql.functions.{min, max, col, array_max, array_min, mean}
 
 /**
