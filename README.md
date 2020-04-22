@@ -6,8 +6,8 @@ Spark Time Series Set data analysis
 Add the following to your `build.sbt` file:
 
 ```scala
-resolvers += Resolver.bintrayRepo("anthonycoutant", "SparkTSS")
-libraryDependencies += "com.github.unsupervise" %% "spark-tss" % "0.1"
+resolvers += Resolver.bintrayRepo("unsupervise", "maven")
+libraryDependencies += "com.github.unsupervise" %% "spark-tss" % "0.1.1"
 ```
 
 Or in your `pom.xml` file:
@@ -18,7 +18,7 @@ Or in your `pom.xml` file:
     <dependency>
         <groupId>com.github.unsupervise</groupId>
         <artifactId>spark-tss_2.11</artifactId>
-        <version>0.1</version>
+        <version>0.1.1</version>
         <type>pom</type>
     </dependency>
 </dependencies>
