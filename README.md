@@ -19,7 +19,6 @@ Or in your `pom.xml` file:
         <groupId>com.github.unsupervise</groupId>
         <artifactId>spark-tss_2.11</artifactId>
         <version>0.1.1</version>
-        <type>pom</type>
     </dependency>
 </dependencies>
 <repositories>
