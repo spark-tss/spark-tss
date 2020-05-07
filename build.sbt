@@ -3,7 +3,7 @@ import Keys._
 
 name := "spark-tss"
 
-version := "0.1.1"
+version := "0.1.2"
 
 scalaVersion := "2.11.12"
 
@@ -49,7 +49,7 @@ resolvers += Resolver.bintrayRepo("clustering4ever", "C4E")
 
 resolvers += Resolver.sonatypeRepo("snapshots")
 
-libraryDependencies += "xyz.florentforest" %% "sparkml-som" % "0.1"
+libraryDependencies += "xyz.florentforest" %% "sparkml-som" % "0.2"
 
 //libraryDependencies += "com.LIPN" %% "bopt" % "1.0"
 //libraryDependencies += "com.github.yazidjanati" %% "bopt" % "0.2.1"
