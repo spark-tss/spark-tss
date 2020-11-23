@@ -1,7 +1,7 @@
 package com.github.unsupervise.spark.tss.core
 
 /**
-  * Created by antho on 20/06/2019.
+  * Created by Anthony Coutant on 20/06/2019.
   */
 object Utils {
   /**
@@ -36,6 +36,19 @@ object Utils {
           m +  Math.log(accum)
         }
     }
+  }
+  def sample(probabilities: List[Double]): Int = {
+    val dist = probabilities.indices zip probabilities
+    val threshold = scala.util.Random.nextDouble
+    val iterator = dist.iterator
+    var accumulator = 0.0
+    while (iterator.hasNext) {
+      val (cluster, clusterProb) = iterator.next
+      accumulator += clusterProb
+      if (accumulator >= threshold)
+        return cluster
+    }
+    sys.error("Error")
   }
 
 }

@@ -4,7 +4,7 @@ import org.apache.spark.broadcast.Broadcast
 import spire.ClassTag
 
 /**
-  * Created by antho on 20/05/2019.
+  * Created by Anthony Coutant on 20/05/2019.
   */
 final case class PrototypeDistsF[V <: Seq[Int] : ClassTag, VV <: Array[Array[Double]], T : ClassTag](
   interPrototypesCachedDistances: Broadcast[VV],

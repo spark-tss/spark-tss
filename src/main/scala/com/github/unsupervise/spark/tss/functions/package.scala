@@ -6,6 +6,10 @@ import breeze.signal.{fourierTr, iFourierTr}
 import org.apache.spark.ml.linalg.Vectors
 import smile.wavelet
 
+/**
+  * Created by Anthony Coutant on 25/01/2019.
+  */
+
 package object functions {
 
   /**
@@ -157,6 +161,10 @@ package object functions {
     */
   val seqToVec = ((seq: Seq[Double]) => {
     Vectors.dense(seq.toArray)
+  })
+
+  val elementAt = ((coll: Seq[Int], index: Int) => {
+    coll(index)
   })
 
 }

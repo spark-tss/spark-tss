@@ -11,7 +11,7 @@ import smile.mds
 case class GroupedDistance(refId: Long, distances: Seq[(Long, Double)])
 
 /**
-  * Created by antho on 25/01/2019.
+  * Created by Anthony Coutant on 25/01/2019.
   */
 //TODO: Generalize with multiple distances per pair (for easyness of use)
 //For now, only unimodal (distances inside one set of objects) data is considered

@@ -3,7 +3,7 @@ import Keys._
 
 name := "spark-tss"
 
-version := "0.1.2"
+version := "0.2-SNAPSHOT"
 
 scalaVersion := "2.11.12"
 
@@ -36,9 +36,12 @@ libraryDependencies  ++= Seq(
 //BLAS / LAPACK
 libraryDependencies += "com.github.fommil.netlib" % "all" % "1.1.2"
 
+//OpenCSV
+libraryDependencies += "com.opencsv" % "opencsv" % "4.0"
+
 //TESTS
 libraryDependencies += "org.scalactic" %% "scalactic" % "3.0.5"
-libraryDependencies += "org.scalatest" %% "scalatest" % "3.0.5" % "test"
+libraryDependencies += "org.scalatest" %% "scalatest" % "3.0.5" % Test
 
 resolvers += "Sonatype Releases" at "https://oss.sonatype.org/content/repositories/releases/"
 //resolvers += "Artima Maven Repository" at "http://repo.artima.com/releases"
@@ -70,7 +73,13 @@ developers := List(
   Developer(
     id    = "acout",
     name  = "Anthony Coutant",
-    email = "coutant@lipn.univ-paris13.fr",
-    url   = url("http://anthonycoutant.me")
+    email = "ac@anthonycoutant.com",
+    url   = url("http://anthonycoutant.com")
+  ),
+  Developer(
+    id    = "EtienneGof",
+    name  = "Etienne Goffinet",
+    email = "etienne.goffinet@gmail.com",
+    url   = url("https://etiennegoffi.net/")
   )
 )

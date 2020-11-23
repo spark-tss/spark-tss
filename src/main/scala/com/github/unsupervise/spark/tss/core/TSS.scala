@@ -1,6 +1,21 @@
+/**
+  * Created by Anthony Coutant on 25/01/2019.
+  */
+
 package com.github.unsupervise.spark.tss.core
 
 import com.github.unsupervise.spark.tss.functions._
+import com.github.unsupervise.spark.tss.clustering.funclbm.FunCondLatentBlock
+import com.github.unsupervise.spark.tss.clustering.funclbm.Tools.writeFunCLBMResults
+import com.github.unsupervise.spark.tss.clustering.funclbm
+import com.github.unsupervise.spark.tss.clustering.funlbm.FunLatentBlock
+import com.github.unsupervise.spark.tss.clustering.funlbm.Tools.writeFunLBMResults
+import com.github.unsupervise.spark.tss.clustering.funlbm
+import com.github.unsupervise.spark.tss.clustering.clbm.CondLatentBlock
+import com.github.unsupervise.spark.tss.clustering.clbm
+import com.github.unsupervise.spark.tss.clustering.lbm.LatentBlock
+import com.github.unsupervise.spark.tss.clustering.lbm
+
 import java.io.{BufferedWriter, File, FileWriter}
 import java.util.UUID
 
@@ -21,7 +36,7 @@ import org.apache.spark.sql.expressions.{UserDefinedAggregateFunction, UserDefin
 import org.apache.spark.sql.functions.{first, sum, _}
 import org.apache.spark.sql.types._
 import org.apache.spark.storage.StorageLevel
-import org.clustering4ever.clustering.indices.InternalIndicesDistributed
+import org.clustering4ever.clustering.indices.{InternalIndicesDistributed, MultiExternalIndicesDistributed}
 import org.clustering4ever.clusterizables.EasyClusterizable
 import org.clustering4ever.math.distances.scalar.Euclidean
 import org.clustering4ever.scala.clustering.tensor.EigenValue
@@ -279,6 +294,8 @@ case class TSS(inSeries: DataFrame, forceIds: Boolean = false) {
     * @return an UDF for given categories number
     */
   def categoricalBinaryEncodingUDF(categoriesNumber: Int) = udf((category: Double) => categoricalBinaryEncoding(categoriesNumber)(category))
+
+  val elementAtUDF = udf((coll: Seq[Int], index: Int) => elementAt(coll, index))
   //END USER DEFINED FUNCTIONS
 
   //PRIVATE FUNCTIONS
@@ -731,7 +748,7 @@ case class TSS(inSeries: DataFrame, forceIds: Boolean = false) {
     * @param pcaContribVariablesOutFile (NOT IMPLEMENTED FOR NOW cause not supported by Spark ML) the File where to store the per variable contribution to PCA axes matrix
     * @return a TSS with the extra PCA ooordinates column creation planned
     */
-  def addPCA(outColName: String, inColName: String, maxK: Int, significancyThreshold: Double,
+  def addPCA(outColName: String, inColName: String, maxK: Int, significancyThreshold: Double = 0D,
              pcaLoadingsOutFile: Option[File] = None, pcaVariancesOutFile: Option[File] = None,
              pcaCos2OutFile: Option[File] = None, pcaContribVariablesOutFile: Option[File] = None) = {
     val pca = new PCA()
@@ -739,15 +756,17 @@ case class TSS(inSeries: DataFrame, forceIds: Boolean = false) {
       .setOutputCol(outColName)
       .setK(maxK)
       .fit(series)
-    val significantPCADimensions =
-      pca.explainedVariance.values.indices.find(i => {
-        pca.explainedVariance.values.slice(0, i + 1).sum >= significancyThreshold
+    val pcaRes = if(significancyThreshold <= 0D) pca else {
+      val significantPCADimensions =
+        pca.explainedVariance.values.indices.find(i => {
+          pca.explainedVariance.values.slice(0, i + 1).sum >= significancyThreshold
       }).getOrElse(maxK - 1) + 1
-    val pcaRes = new PCA()
-      .setInputCol(inColName)
-      .setOutputCol(outColName)
-      .setK(significantPCADimensions)
-      .fit(series)
+      new PCA()
+        .setInputCol(inColName)
+        .setOutputCol(outColName)
+        .setK(significantPCADimensions)
+        .fit(series)
+    }
     pcaLoadingsOutFile.map(f => {
       val parLoadingsFileWriter = new BufferedWriter(new FileWriter(f))
       (0 until pcaRes.pc.numRows).foreach(i => {
@@ -766,6 +785,29 @@ case class TSS(inSeries: DataFrame, forceIds: Boolean = false) {
       parVarianceFileWriter.close()
     })
     new TSS(pcaRes.transform(series))
+  }
+
+  def addPCA_(outColName: String,
+             inColName: String,
+             maxK: Int,
+             significancyThreshold: Double = 0D):(TSS, PCAModel) = {
+    val pca = new PCA()
+      .setInputCol(inColName)
+      .setOutputCol(outColName)
+      .setK(maxK)
+      .fit(series)
+    val pcaRes = if(significancyThreshold <= 0D) pca else {
+      val significantPCADimensions =
+        pca.explainedVariance.values.indices.find(i => {
+          pca.explainedVariance.values.slice(0, i + 1).sum >= significancyThreshold
+      }).getOrElse(maxK - 1) + 1
+      new PCA()
+        .setInputCol(inColName)
+        .setOutputCol(outColName)
+        .setK(significantPCADimensions)
+        .fit(series)
+    }
+    (new TSS(pcaRes.transform(series)), pcaRes)
   }
 
   /**
@@ -1099,7 +1141,6 @@ case class TSS(inSeries: DataFrame, forceIds: Boolean = false) {
       writer.close()
     })
 
-    //TODO: Output to File
     println("OUT STRESS = " + bestStress)
     stressOutFile.map(f => {
       val writer = new BufferedWriter(new FileWriter(f))
@@ -1385,6 +1426,253 @@ case class TSS(inSeries: DataFrame, forceIds: Boolean = false) {
     return InternalIndicesDistributed.ballHall(clusterizedRaw, metric, 0)
   }
 
+  //EXTERNAL CLUSTERING EVALUATORS (I.E. VS. GOLDEN TRUTH)
+
+  /**
+    * Returns the Accuracy external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def accuracy(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).accuracy
+  }
+
+/**
+    * Returns the Adjusted Rand Index external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def arand(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).arand
+  }
+
+  def contingencyTable(predColName: String, truthColName: String)(implicit ss: SparkSession): Array[Array[Long]] = {
+    externalEvalC4E(predColName, truthColName).contingencyTable
+  }
+
+/**
+    * Returns the F1 external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def f1(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).f1
+  }
+
+/**
+    * Returns the F-Beta external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def fBeta(predColName: String, truthColName: String)(implicit ss: SparkSession): Double => Double = {
+    externalEvalC4E(predColName, truthColName).fBeta
+  }
+
+/**
+    * Returns the False Negative external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def fn(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).fn
+  }
+
+/**
+    * Returns the Folkes-Mallows external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def folkesMallows(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).folkesMallows
+  }
+
+/**
+    * Returns the False Positive external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def fp(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).fp
+  }
+
+/**
+    * Returns the Jaccard external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def jaccard(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).jaccard
+  }
+
+/**
+    * Returns the Kulcztnski external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def kulcztnski(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).kulcztnski
+  }
+
+/**
+    * Returns the Mc Nemar external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def mcNemar(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).mcNemar
+  }
+
+/**
+    * Returns the MCC external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def mcc(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).mcc
+  }
+
+/**
+    * Returns the Mutual Information external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def mutualInformation(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).mutualInformation
+  }
+
+/**
+    * Returns the Normalized Mutual Information by Max external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def nmiMAX(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).nmiMAX
+  }
+
+ /**
+    * Returns the Normalized Mutual Information by Sqrt external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */ 
+  def nmiSQRT(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).nmiSQRT
+  }
+
+/**
+    * Returns the Purity external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def purity(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).purity
+  }
+
+/**
+    * Returns the Rand Index external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def rand(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).rand
+  }
+
+/**
+    * Returns the Recall external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def recall(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).recall
+  }
+
+/**
+    * Returns the Rogers-Tanimoto external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def rogersTanimoto(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).rogersTanimoto
+  }
+
+/**
+    * Returns the Russel-Rao external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def russelRao(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).russelRao
+  }
+
+/**
+    * Returns the Sokal Sneath 1 external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def sokalSneath1(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).sokalSneath1
+  }
+
+/**
+    * Returns the Sokal Sneath 2 external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def sokalSneath2(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).sokalSneath2
+  }
+
+/**
+    * Returns the True Negative external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def tn(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).tn
+  }
+
+/**
+    * Returns the True Positive external clustering evaluation measure
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def tp(predColName: String, truthColName: String)(implicit ss: SparkSession): Double = {
+    externalEvalC4E(predColName, truthColName).tp
+  }
+
+/**
+    * Returns the MultiExternalIndicesDistributed object of C4E package for given clustering truth and prediction columns.
+    * This allows to call multiple C4E evaluators at the same time
+    * @param predColName the column name containing the predicted clustering id of individuals for clustering evaluation
+    * @param truthColName the column name containing the true clustering id of individuals for clustering evaluation
+    * @param ss
+    */
+  def externalEvalC4E(predColName: String, truthColName: String)(implicit ss: SparkSession): MultiExternalIndicesDistributed = {
+    MultiExternalIndicesDistributed(series.select(truthColName, predColName).rdd.map(r => (r.getInt(0), r.getInt(1))))
+  }
+
   /**
     * Adds two columns with hard and soft per-row clustering memberships after a Gaussian Mixture Model (GMM) algorithm execution.
     * This variant uses Spark ML GMM implementation.
@@ -1631,6 +1919,333 @@ case class TSS(inSeries: DataFrame, forceIds: Boolean = false) {
   }
 
   /**
+    * Adds a hard clustering column obtained by Latent Block Model (LBM) co-clustering algorithm.
+    * @param outColName the name of the output clustering column
+    * @param sourceColName the name of the input representation to use for clustering. LBM works on multivariate grouped series (Seq[Seq[Double]]) only!
+    * @param sourceIdColName the name of the input data ids, used for model evaluation
+    * @param sourceSeriesColName the name of the untransformed "raw" series for model evaluation
+    * @param k the number of series clusters
+    * @param l the number of features clusters
+    * @param maxIter the max number of iterations during LBM
+    * @param maxBurninIter the max number of iterations during LBM burnin phase
+    * @param initMethod the initialization method defined as a string
+    * @param samplingMethod the sampling method defined as a string
+    * @param verbose whether to display verbose information during call
+    * @param nConcurrent the number of learning LBM repetitions to launch
+    * @param nTryMaxPerConcurrent the max number of trial for convergence to perform per repetition
+    * @param modelOutFolderPath (optional) the folder path where model evaluation will be stored
+    */
+  def addLBM(outColName: String, sourceColName: String, sourceIdColName: String, sourceSeriesColName: String, 
+                 k: Int, l: Int, maxIter: Int, maxBurninIter: Int, initMethod: String, samplingMethod: String, 
+                 verbose: Boolean, nConcurrent: Int, nTryMaxPerConcurrent: Int, modelOutFolderPath: Option[String] = None)(implicit ss: SparkSession) = {
+    val rdd = series.select(sourceIdColName, sourceColName, sourceSeriesColName).rdd.map(
+      r => (r.getString(0).toInt, //TODO: What if not int ?
+            r.getSeq[Seq[Double]](1).map(l => DenseVector[Double](l.toArray)).toArray, 
+            r.getSeq[Seq[Double]](2).map(l => DenseVector[Double](l.toArray)).toArray)
+    )
+    val sourceRDD = rdd.map(x => (x._1, x._2))
+    val seriesRDD = rdd.map(x => (x._1, x._3))
+    val latentBlock = new LatentBlock()
+    latentBlock.setK(k).setL(l).setMaxIterations(maxIter).setMaxBurninIterations(maxBurninIter)
+    val outputSEM = latentBlock.run(sourceRDD, samplingMethod, verbose, nConcurrent, nTryMaxPerConcurrent, initMethod)
+    modelOutFolderPath.map(path => lbm.Tools.writeFunLBMResults(outputSEM, sourceRDD, seriesRDD, None, None, path))
+    val ids = rdd.map(_._1).sortBy(x => x).zipWithIndex.map{ case (i, ii) => ii -> i }
+    val rowPartitions = outputSEM("RowPartition").asInstanceOf[List[Int]]
+    val rowPartitionsRDD = ss.sparkContext.parallelize(rowPartitions).zipWithIndex.map{ case (p, ii) => ii -> p }
+    val rowPartitionsDF = rowPartitionsRDD.join(ids).map{ case (ii, (p, i)) => (i, p) }.toDF("__joinId__", outColName)
+    addByLeftJoin(rowPartitionsDF, rowPartitionsDF("__joinId__") === series(sourceIdColName)).drop("__joinId__")
+  }
+
+  /**
+    * Adds a hard clustering column obtained by Best over Grid Search of Latent Block Model (LBM) co-clustering algorithm.
+    * @param outColName the name of the output clustering column
+    * @param sourceColName the name of the input representation to use for clustering. LBM works on multivariate grouped series (Seq[Seq[Double]]) only!
+    * @param sourceIdColName the name of the input data ids, used for model evaluation
+    * @param sourceSeriesColName the name of the untransformed "raw" series for model evaluation
+    * @param ksRange the series cluster number grid
+    * @param lsRange the features cluster number grid
+    * @param samplingMethod the sampling method defined as a string
+    * @param verbose whether to display verbose information during call
+    * @param nConcurrent the number of learning LBM repetitions to launch
+    * @param nTryMaxPerConcurrent the max number of trial for convergence to perform per repetition
+    * @param modelOutFolderPath (optional) the folder path where model evaluation will be stored
+    */
+  def addAutoLBMGrid(outColName: String, sourceColName: String, sourceIdColName: String, sourceSeriesColName: String, 
+                 ksRange: List[Int], lsRange: List[Int], samplingMethod: String, verbose: Boolean, nConcurrent: Int, nTryMaxPerConcurrent: Int, 
+                 modelOutFolderPath: Option[String] = None)(implicit ss: SparkSession) = {
+    val rdd = series.select(sourceIdColName, sourceColName, sourceSeriesColName).rdd.map(
+      r => (r.getString(0).toInt, //TODO: What if not int ?
+            r.getSeq[Seq[Double]](1).map(l => DenseVector[Double](l.toArray)).toArray, 
+            r.getSeq[Seq[Double]](2).map(l => DenseVector[Double](l.toArray)).toArray)
+    )
+    val sourceRDD = rdd.map(x => (x._1, x._2))
+    val seriesRDD = rdd.map(x => (x._1, x._3))
+    val outputSEM = lbm.ModelSelection.gridSearch(sourceRDD, samplingMethod, ksRange, lsRange, verbose, nConcurrent, nTryMaxPerConcurrent)
+    modelOutFolderPath.map(path => lbm.Tools.writeFunLBMResults(outputSEM, sourceRDD, seriesRDD, None, None, path))
+    val ids = rdd.map(_._1).sortBy(x => x).zipWithIndex.map{ case (i, ii) => ii -> i }
+    val rowPartitions = outputSEM("RowPartition").asInstanceOf[List[Int]]
+    val rowPartitionsRDD = ss.sparkContext.parallelize(rowPartitions).zipWithIndex.map{ case (p, ii) => ii -> p }
+    val rowPartitionsDF = rowPartitionsRDD.join(ids).map{ case (ii, (p, i)) => (i, p) }.toDF("__joinId__", outColName)
+    addByLeftJoin(rowPartitionsDF, rowPartitionsDF("__joinId__") === series(sourceIdColName)).drop("__joinId__")
+  }
+
+/**
+    * Adds a hard clustering column obtained by Functional Latent Block Model (FunLBM) co-clustering algorithm.
+    * @param outColName the name of the output clustering column
+    * @param sourceColName the name of the input representation to use for clustering. FunLBM works on multivariate grouped series (Seq[Seq[Double]]) only!
+    * @param sourceIdColName the name of the input data ids, used for model evaluation
+    * @param sourceSeriesColName the name of the untransformed "raw" series for model evaluation
+    * @param k the number of series clusters
+    * @param l the number of features clusters
+    * @param maxIter the max number of iterations during FunLBM
+    * @param maxBurninIter the max number of iterations during FunLBM burnin phase
+    * @param initMethod the initialization method defined as a string
+    * @param samplingMethod the sampling method defined as a string
+    * @param verbose whether to display verbose information during call
+    * @param nConcurrent the number of learning FunLBM repetitions to launch
+    * @param nTryMaxPerConcurrent the max number of trial for convergence to perform per repetition
+    * @param modelOutFolderPath (optional) the folder path where model evaluation will be stored
+    */
+  def addFunLBM(outColName: String, sourceColName: String, sourceIdColName: String, sourceSeriesColName: String, 
+                 k: Int, l: Int, maxIter: Int, maxBurninIter: Int, initMethod: String, samplingMethod: String, 
+                 verbose: Boolean, nConcurrent: Int, nTryMaxPerConcurrent: Int, modelOutFolderPath: Option[String] = None)(implicit ss: SparkSession) = {
+    val rdd = series.select(sourceIdColName, sourceColName, sourceSeriesColName).rdd.map(
+      r => (r.getString(0).toInt, //TODO: What if not int ?
+            r.getSeq[Seq[Double]](1).map(l => DenseVector[Double](l.toArray)).toArray, 
+            r.getSeq[Seq[Double]](2).map(l => DenseVector[Double](l.toArray)).toArray)
+    )
+    val sourceRDD = rdd.map(x => (x._1, x._2))
+    val seriesRDD = rdd.map(x => (x._1, x._3))
+    val latentBlock = new FunLatentBlock()
+    latentBlock.setK(k).setL(l).setMaxIterations(maxIter).setMaxBurninIterations(maxBurninIter)
+    val outputSEM = latentBlock.run(sourceRDD, samplingMethod, verbose, nConcurrent, nTryMaxPerConcurrent, initMethod)
+    modelOutFolderPath.map(path => writeFunLBMResults(outputSEM, sourceRDD, seriesRDD, None, None, path))
+    val ids = rdd.map(_._1).sortBy(x => x).zipWithIndex.map{ case (i, ii) => ii -> i }
+    val rowPartitions = outputSEM("RowPartition").asInstanceOf[List[Int]]
+    val rowPartitionsRDD = ss.sparkContext.parallelize(rowPartitions).zipWithIndex.map{ case (p, ii) => ii -> p }
+    val rowPartitionsDF = rowPartitionsRDD.join(ids).map{ case (ii, (p, i)) => (i, p) }.toDF("__joinId__", outColName)
+    addByLeftJoin(rowPartitionsDF, rowPartitionsDF("__joinId__") === series(sourceIdColName)).drop("__joinId__")
+  }
+
+/**
+    * Adds a hard clustering column obtained by Best over Grid Search of Functional Latent Block Model (LBM) co-clustering algorithm.
+    * @param outColName the name of the output clustering column
+    * @param sourceColName the name of the input representation to use for clustering. FunLBM works on multivariate grouped series (Seq[Seq[Double]]) only!
+    * @param sourceIdColName the name of the input data ids, used for model evaluation
+    * @param sourceSeriesColName the name of the untransformed "raw" series for model evaluation
+    * @param ksRange the series cluster number grid
+    * @param lsRange the features cluster number grid
+    * @param samplingMethod the sampling method defined as a string
+    * @param verbose whether to display verbose information during call
+    * @param nConcurrent the number of learning LBM repetitions to launch
+    * @param nTryMaxPerConcurrent the max number of trial for convergence to perform per repetition
+    * @param updateLoadingsStrategy the number of FunLBM iterations after which PCA loadings are updated after each remaining iteration
+    * @param modelOutFolderPath (optional) the folder path where model evaluation will be stored
+    */
+  def addAutoFunLBMGrid(outColName: String, sourceColName: String, sourceIdColName: String, sourceSeriesColName: String, 
+                 ksRange: List[Int], lsRange: List[Int], samplingMethod: String, verbose: Boolean, nConcurrent: Int, 
+                 nTryMaxPerConcurrent: Int, updateLoadingsStrategy: Int, modelOutFolderPath: Option[String] = None)(implicit ss: SparkSession) = {
+    val rdd = series.select(sourceIdColName, sourceColName, sourceSeriesColName).rdd.map(
+      r => (r.getString(0).toInt, //TODO: What if not int ?
+            r.getSeq[Seq[Double]](1).map(l => DenseVector[Double](l.toArray)).toArray, 
+            r.getSeq[Seq[Double]](2).map(l => DenseVector[Double](l.toArray)).toArray)
+    )
+    val sourceRDD = rdd.map(x => (x._1, x._2))
+    val seriesRDD = rdd.map(x => (x._1, x._3))
+    val outputSEM = funlbm.ModelSelection.gridSearch(sourceRDD, samplingMethod, ksRange, lsRange, verbose, nConcurrent, nTryMaxPerConcurrent, updateLoadingsStrategy)
+    modelOutFolderPath.map(path => writeFunLBMResults(outputSEM, sourceRDD, seriesRDD, None, None, path))
+    val ids = rdd.map(_._1).sortBy(x => x).zipWithIndex.map{ case (i, ii) => ii -> i }
+    val rowPartitions = outputSEM("RowPartition").asInstanceOf[List[Int]]
+    val rowPartitionsRDD = ss.sparkContext.parallelize(rowPartitions).zipWithIndex.map{ case (p, ii) => ii -> p }
+    val rowPartitionsDF = rowPartitionsRDD.join(ids).map{ case (ii, (p, i)) => (i, p) }.toDF("__joinId__", outColName)
+    addByLeftJoin(rowPartitionsDF, rowPartitionsDF("__joinId__") === series(sourceIdColName)).drop("__joinId__")
+  }
+
+/**
+    * Adds a hard clustering column obtained by Conditional Latent Block Model (CLBM) conditional co-clustering algorithm.
+    * @param outColName the name of the output clustering column
+    * @param sourceColName the name of the input representation to use for clustering. CLBM works on multivariate grouped series (Seq[Seq[Double]]) only!
+    * @param sourceIdColName the name of the input data ids, used for model evaluation
+    * @param sourceSeriesColName the name of the untransformed "raw" series for model evaluation
+    * @param ks the number of series clusters per feature cluster (conditional clustering style)
+    * @param maxIter the max number of iterations during CLBM
+    * @param maxBurninIter the max number of iterations during CLBM burnin phase
+    * @param initMethod the initialization method defined as a string
+    * @param samplingMethod the sampling method defined as a string
+    * @param exhaustiveOutRowClustering whether to output clustering as a vector of one clustering membership per feature (true) or only one membership per feature cluster (false)
+    * @param verbose whether to display verbose information during call
+    * @param nConcurrent the number of learning CLBM repetitions to launch
+    * @param nTryMaxPerConcurrent the max number of trial for convergence to perform per repetition
+    * @param modelOutFolderPath (optional) the folder path where model evaluation will be stored
+    */
+  def addCLBM(outColName: String, sourceColName: String, sourceIdColName: String, sourceSeriesColName: String, 
+              ks: List[Int], maxIter: Int, maxBurninIter: Int, initMethod: String, samplingMethod: String, exhaustiveOutRowClustering: Boolean, 
+              verbose: Boolean, nConcurrent: Int, nTryMaxPerConcurrent: Int, modelOutFolderPath: Option[String] = None)(implicit ss: SparkSession) = {
+    val rdd = series.select(sourceIdColName, sourceColName, sourceSeriesColName).rdd.map(
+      r => (r.getString(0).toInt, //TODO: What if not int ?
+            r.getSeq[Seq[Double]](1).map(l => DenseVector[Double](l.toArray)).toArray, 
+            r.getSeq[Seq[Double]](2).map(l => DenseVector[Double](l.toArray)).toArray)
+    )
+    val sourceRDD = rdd.map(x => (x._1, x._2))
+    val seriesRDD = rdd.map(x => (x._1, x._3))
+    val latentBlock = new CondLatentBlock()
+    latentBlock.setKVec(ks).setMaxIterations(maxIter).setMaxBurninIterations(maxBurninIter)
+    val outputSEM = latentBlock.run(sourceRDD, samplingMethod, verbose, nConcurrent, nTryMaxPerConcurrent, initMethod)
+    modelOutFolderPath.map(path => clbm.Tools.writeFunCLBMResults(outputSEM, sourceRDD, seriesRDD, None, None, path))
+    val ids = rdd.map(_._1).sortBy(x => x).zipWithIndex.map{ case (i, ii) => ii -> i }
+    val rowPartitions = outputSEM("RowPartition").asInstanceOf[List[List[Int]]].transpose
+    val rowPartitionsDF = {
+      val rowPartitionsRDD = {
+        if(!exhaustiveOutRowClustering){
+          ss.sparkContext.parallelize(rowPartitions).zipWithIndex.map{ case (p, ii) => ii -> p }
+        }else{
+          val exhaustiveRowPartitions = rowPartitions.map(x => outputSEM("ColPartition").asInstanceOf[List[Int]].map(y => x(y)))
+          ss.sparkContext.parallelize(exhaustiveRowPartitions).zipWithIndex.map{ case (p, ii) => ii -> p }
+        }
+      }
+      rowPartitionsRDD.join(ids).map{ case (ii, (p, i)) => (i, p) }.toDF("__joinId__", outColName)
+    }  
+    addByLeftJoin(rowPartitionsDF, rowPartitionsDF("__joinId__") === series(sourceIdColName)).drop("__joinId__")
+  }
+
+/**
+    * Adds a hard clustering column obtained by Best over Grid Search of Conditional Latent Block Model (CLBM) conditional co-clustering algorithm.
+    * @param outColName the name of the output clustering column
+    * @param sourceColName the name of the input representation to use for clustering. CLBM works on multivariate grouped series (Seq[Seq[Double]]) only!
+    * @param sourceIdColName the name of the input data ids, used for model evaluation
+    * @param sourceSeriesColName the name of the untransformed "raw" series for model evaluation
+    * @param ksRange the series cluster number grid
+    * @param lsRange the features cluster number grid
+    * @param lbmKsRange the series cluster number grid for LBM phase (prior to CLBM one)
+    * @param samplingMethod the sampling method defined as a string
+    * @param exhaustiveOutRowClustering whether to output clustering as a vector of one clustering membership per feature (true) or only one membership per feature cluster (false)
+    * @param verbose whether to display verbose information during call
+    * @param nConcurrent the number of learning LBM repetitions to launch
+    * @param nTryMaxPerConcurrent the max number of trial for convergence to perform per repetition
+    * @param modelOutFolderPath (optional) the folder path where model evaluation will be stored
+    */
+  def addAutoCLBMAfterLBMGrid(outColName: String, sourceColName: String, sourceIdColName: String, sourceSeriesColName: String, 
+                 ksRange: List[Int], lsRange: List[Int], lbmKsRange: List[Int], samplingMethod: String, exhaustiveOutRowClustering: Boolean, 
+                 verbose: Boolean, nConcurrent: Int, nTryMaxPerConcurrent: Int, 
+                 modelOutFolderPath: Option[String] = None)(implicit ss: SparkSession) = {
+    val rdd = series.select(sourceIdColName, sourceColName, sourceSeriesColName).rdd.map(
+      r => (r.getString(0).toInt, //TODO: What if not int ?
+            r.getSeq[Seq[Double]](1).map(l => DenseVector[Double](l.toArray)).toArray, 
+            r.getSeq[Seq[Double]](2).map(l => DenseVector[Double](l.toArray)).toArray)
+    )
+    val sourceRDD = rdd.map(x => (x._1, x._2))
+    val seriesRDD = rdd.map(x => (x._1, x._3))
+    val outputSEM = clbm.ModelSelection.bestModelAfterLBMGridSearch(sourceRDD, lsRange, ksRange, lbmKsRange, samplingMethod, nConcurrent, verbose, nTryMaxPerConcurrent)
+    modelOutFolderPath.map(path => writeFunCLBMResults(outputSEM, sourceRDD, seriesRDD, None, None, path))
+    val ids = rdd.map(_._1).sortBy(x => x).zipWithIndex.map{ case (i, ii) => ii -> i }
+    val rowPartitions = outputSEM("RowPartition").asInstanceOf[List[List[Int]]].transpose
+    val rowPartitionsDF = {
+      val rowPartitionsRDD = {
+        if(!exhaustiveOutRowClustering){
+          ss.sparkContext.parallelize(rowPartitions).zipWithIndex.map{ case (p, ii) => ii -> p }
+        }else{
+          val exhaustiveRowPartitions = rowPartitions.map(x => outputSEM("ColPartition").asInstanceOf[List[Int]].map(y => x(y)))
+          ss.sparkContext.parallelize(exhaustiveRowPartitions).zipWithIndex.map{ case (p, ii) => ii -> p }
+        }
+      }
+      rowPartitionsRDD.join(ids).map{ case (ii, (p, i)) => (i, p) }.toDF("__joinId__", outColName)
+    }  
+    addByLeftJoin(rowPartitionsDF, rowPartitionsDF("__joinId__") === series(sourceIdColName)).drop("__joinId__")
+  }
+
+/**
+    * Adds a hard clustering column obtained by Functional Conditional Latent Block Model (FunCLBM) conditional co-clustering algorithm.
+    * @param outColName the name of the output clustering column
+    * @param sourceColName the name of the input representation to use for clustering. FunCLBM works on multivariate grouped series (Seq[Seq[Double]]) only!
+    * @param sourceIdColName the name of the input data ids, used for model evaluation
+    * @param sourceSeriesColName the name of the untransformed "raw" series for model evaluation
+    * @param ks the number of series clusters per feature cluster (conditional clustering style)
+    * @param maxIter the max number of iterations during FunCLBM
+    * @param maxBurninIter the max number of iterations during FunCLBM burnin phase
+    * @param initMethod the initialization method defined as a string
+    * @param samplingMethod the sampling method defined as a string
+    * @param exhaustiveOutRowClustering whether to output clustering as a vector of one clustering membership per feature (true) or only one membership per feature cluster (false)
+    * @param verbose whether to display verbose information during call
+    * @param nConcurrent the number of learning FunCLBM repetitions to launch
+    * @param nTryMaxPerConcurrent the max number of trial for convergence to perform per repetition
+    * @param modelOutFolderPath (optional) the folder path where model evaluation will be stored
+    */
+  def addFunCLBM(outColName: String, sourceColName: String, sourceIdColName: String, sourceSeriesColName: String, 
+                 ks: List[Int], maxIter: Int, maxBurninIter: Int, initMethod: String, samplingMethod: String, exhaustiveOutRowClustering: Boolean, 
+                 verbose: Boolean, nConcurrent: Int, nTryMaxPerConcurrent: Int, modelOutFolderPath: Option[String] = None)(implicit ss: SparkSession) = {
+    val rdd = series.select(sourceIdColName, sourceColName, sourceSeriesColName).rdd.map(
+      r => (r.getString(0).toInt, //TODO: What if not int ?
+            r.getSeq[Seq[Double]](1).map(l => DenseVector[Double](l.toArray)).toArray, 
+            r.getSeq[Seq[Double]](2).map(l => DenseVector[Double](l.toArray)).toArray)
+    )
+    val sourceRDD = rdd.map(x => (x._1, x._2))
+    val seriesRDD = rdd.map(x => (x._1, x._3))
+    val latentBlock = new FunCondLatentBlock()
+    latentBlock.setKVec(ks).setMaxIterations(maxIter).setMaxBurninIterations(maxBurninIter)
+    val outputSEM = latentBlock.run(sourceRDD, samplingMethod, verbose, nConcurrent, nTryMaxPerConcurrent, initMethod)
+    modelOutFolderPath.map(path => writeFunCLBMResults(outputSEM, sourceRDD, seriesRDD, None, None, path))
+    val ids = rdd.map(_._1).sortBy(x => x).zipWithIndex.map{ case (i, ii) => ii -> i }
+    val rowPartitions = outputSEM("RowPartition").asInstanceOf[List[List[Int]]].transpose
+    val rowPartitionsDF = {
+      val rowPartitionsRDD = {
+        if(!exhaustiveOutRowClustering){
+          ss.sparkContext.parallelize(rowPartitions).zipWithIndex.map{ case (p, ii) => ii -> p }
+        }else{
+          val exhaustiveRowPartitions = rowPartitions.map(x => outputSEM("ColPartition").asInstanceOf[List[Int]].map(y => x(y)))
+          ss.sparkContext.parallelize(exhaustiveRowPartitions).zipWithIndex.map{ case (p, ii) => ii -> p }
+        }
+      }
+      rowPartitionsRDD.join(ids).map{ case (ii, (p, i)) => (i, p) }.toDF("__joinId__", outColName)
+    }  
+    addByLeftJoin(rowPartitionsDF, rowPartitionsDF("__joinId__") === series(sourceIdColName)).drop("__joinId__")
+  }
+
+/**
+    * Adds a hard clustering column obtained by Best over Grid Search of Functional Conditional Latent Block Model (FunCLBM) conditional co-clustering algorithm.
+    * @param outColName the name of the output clustering column
+    * @param sourceColName the name of the input representation to use for clustering. FunCLBM works on multivariate grouped series (Seq[Seq[Double]]) only!
+    * @param sourceIdColName the name of the input data ids, used for model evaluation
+    * @param sourceSeriesColName the name of the untransformed "raw" series for model evaluation
+    * @param ksRange the series cluster number grid
+    * @param lsRange the features cluster number grid
+    * @param samplingMethod the sampling method defined as a string
+    * @param exhaustiveOutRowClustering whether to output clustering as a vector of one clustering membership per feature (true) or only one membership per feature cluster (false)
+    * @param verbose whether to display verbose information during call
+    * @param nConcurrent the number of learning LBM repetitions to launch
+    * @param nTryMaxPerConcurrent the max number of trial for convergence to perform per repetition
+    * @param updateLoadingsStrategy the number of FunCLBM iterations after which PCA loadings are updated after each remaining iteration
+    * @param modelOutFolderPath (optional) the folder path where model evaluation will be stored
+    */
+  def addAutoFunCLBMAfterLBMGrid(outColName: String, sourceColName: String, sourceIdColName: String, sourceSeriesColName: String, 
+                 ksRange: List[Int], lsRange: List[Int], initMethod: String, samplingMethod: String, exhaustiveOutRowClustering: Boolean, 
+                 verbose: Boolean, nConcurrent: Int, nTryMaxPerConcurrent: Int, updateLoadingsStrategy: Int, 
+                 modelOutFolderPath: Option[String] = None)(implicit ss: SparkSession) = {
+    val rdd = series.select(sourceIdColName, sourceColName, sourceSeriesColName).rdd.map(
+      r => (r.getString(0).toInt, //TODO: What if not int ?
+            r.getSeq[Seq[Double]](1).map(l => DenseVector[Double](l.toArray)).toArray, 
+            r.getSeq[Seq[Double]](2).map(l => DenseVector[Double](l.toArray)).toArray)
+    )
+    val sourceRDD = rdd.map(x => (x._1, x._2))
+    val seriesRDD = rdd.map(x => (x._1, x._3))
+    val outputSEM = funclbm.ModelSelection.bestModelAfterFunLBMGridSearch(sourceRDD, lsRange, ksRange, samplingMethod, initMethod, nConcurrent, verbose, nTryMaxPerConcurrent, updateLoadingsStrategy)
+    modelOutFolderPath.map(path => writeFunCLBMResults(outputSEM, sourceRDD, seriesRDD, None, None, path))
+    val ids = rdd.map(_._1).sortBy(x => x).zipWithIndex.map{ case (i, ii) => ii -> i }
+    val rowPartitions = outputSEM("RowPartition").asInstanceOf[List[List[Int]]].transpose
+    val rowPartitionsDF = {
+      val rowPartitionsRDD = {
+        if(!exhaustiveOutRowClustering){
+          ss.sparkContext.parallelize(rowPartitions).zipWithIndex.map{ case (p, ii) => ii -> p }
+        }else{
+          val exhaustiveRowPartitions = rowPartitions.map(x => outputSEM("ColPartition").asInstanceOf[List[Int]].map(y => x(y)))
+          ss.sparkContext.parallelize(exhaustiveRowPartitions).zipWithIndex.map{ case (p, ii) => ii -> p }
+        }
+      }
+      rowPartitionsRDD.join(ids).map{ case (ii, (p, i)) => (i, p) }.toDF("__joinId__", outColName)
+    }  
+    addByLeftJoin(rowPartitionsDF, rowPartitionsDF("__joinId__") === series(sourceIdColName)).drop("__joinId__")
+  }
+
+  /**
     * Adds a column obtained by applying a UDF to each row
     * @param outColName the added column name
     * @param sourceColNames a Seq[String] of column names, to be used as UDF input
@@ -1693,6 +2308,10 @@ case class TSS(inSeries: DataFrame, forceIds: Boolean = false) {
     */
   def addNullifyValues(outColName: String, sourceColName: String, startIndex: Int, quantity: Int) = {
     TSS(series.withColumn(outColName, nullifyValuesSliceUDF(startIndex, quantity)(series(sourceColName))))
+  }
+
+  def addElementAt(outColName: String, sourceCollectionColName: String, sourceIndexColName: String) = {
+    TSS(series.withColumn(outColName, elementAtUDF(series(sourceCollectionColName), series(sourceIndexColName))))
   }
 
   /**
@@ -2151,6 +2770,8 @@ case class TSS(inSeries: DataFrame, forceIds: Boolean = false) {
     */
   def withColumnRenamed(existingName: String, newName: String) = TSS(series.withColumnRenamed(existingName, newName))
 
+  def withColumn(newName: String, col: Column) = TSS(series.withColumn(newName, col))
+
   def sortByFirstUDF(schema: DataType) = udf((rows: Seq[Row]) => {
     rows.sortBy(_.getString(0))//.map(_.getInt(1))//.toSeq.drop(1)
   }, schema)
@@ -2220,7 +2841,7 @@ case class TSS(inSeries: DataFrame, forceIds: Boolean = false) {
     */
   def saveCSV(path: String, header: Boolean = true, overwrite: Boolean = false) = {
     val schema = series.schema
-    series.select(schema.flatMap(col => {
+    val subWrite = series.select(schema.flatMap(col => {
       col.dataType match {
         case ArrayType(_, _) => List(concat_ws(";", series(esc(col.name))).alias(col.name))
         case MapType(_, _, _) => {
@@ -2229,7 +2850,8 @@ case class TSS(inSeries: DataFrame, forceIds: Boolean = false) {
         }
         case _ => List(series(esc(col.name)))
       }
-    }): _*).write.format("com.databricks.spark.csv").option("header", header).save(path)
+    }): _*).write
+    (if(overwrite) subWrite.mode("overwrite") else subWrite).format("com.databricks.spark.csv").option("header", header).save(path)
   }
   //END INTERFACE FUNCTIONS
 
@@ -2240,6 +2862,7 @@ object TSS {
   val SIMULATIONID_DECORATORNAME: String = "simulationId"
   val SIMULATIONNAME_DECORATORNAME: String = "simulationName"
   val SIMULATIONPLANID_DECORATORNAME: String = "planId"
+  val VARNAME_DECORATORNAME: String = "varName"
 
   val METADATA_COLNAME: String = "metadata"
   val DECORATORS_COLNAME: String = "decorators"
@@ -2465,6 +3088,34 @@ object TSS {
     //decoratedPlan.repartition(planSettings.partitionsNumber).save(planSettings.dbfsOutFolderPath + "/plan_with_decorators.parquet", true)
     //tt.unpersist
     decoratedPlan
+  }
+
+  def fromRDD4[U, V](data: RDD[(U, V, List[Double], List[Double])])(implicit ss: SparkSession): TSS = {
+
+    val rddNewEncoding = data.map(row =>
+      (row._1.toString,
+        row._2.toString,
+        row._3.head,
+        row._3.last,
+        row._3(1) - row._3.head,
+        row._4))
+
+    val dfWithSchema = ss.createDataFrame(rddNewEncoding)
+      .toDF(TSS.SIMULATIONID_DECORATORNAME, TSS.VARNAME_DECORATORNAME, TSS.TIMEFROM_COLNAME, TSS.TIMETO_COLNAME, 
+            TSS.TIMEGRANULARITY_COLNAME, TSS.SERIES_COLNAME)
+
+    val dfWithDecorator = dfWithSchema.select(
+        map(lit(TSS.SIMULATIONID_DECORATORNAME),
+          col(TSS.SIMULATIONID_DECORATORNAME),
+          lit(TSS.VARNAME_DECORATORNAME),
+          col(TSS.VARNAME_DECORATORNAME)).alias(TSS.DECORATORS_COLNAME),
+        col(TSS.TIMEFROM_COLNAME),
+        col(TSS.TIMETO_COLNAME),
+        col(TSS.TIMEGRANULARITY_COLNAME),
+        col(TSS.SERIES_COLNAME).alias(TSS.SERIES_COLNAME)
+      )
+
+    TSS(dfWithDecorator)
   }
 
   /**

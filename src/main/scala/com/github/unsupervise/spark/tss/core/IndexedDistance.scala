@@ -1,7 +1,7 @@
 package com.github.unsupervise.spark.tss.core
 
 /**
-  * Created by antho on 19/12/2018.
+  * Created by Anthony Coutant on 19/12/2018.
   */
 
 /**
